@@ -3,12 +3,12 @@
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-td_type <- function(kind, ...) {
-  structure(list(kind = kind, ...), class = "td_type")
+psl_type <- function(kind, ...) {
+  structure(list(kind = kind, ...), class = "psl_type")
 }
 
 cxx_type <- function(type) {
-  stopifnot(inherits(type, "td_type"))
+  stopifnot(inherits(type, "psl_type"))
   if (type$kind == "prim") return(type$cxx)
   if (type$kind == "ptr") {
     if (is.null(type$elem)) return("void*")
@@ -28,118 +28,118 @@ cxx_type <- function(type) {
 }
 
 ty <- new.env(parent = emptyenv())
-ty$i32 <- td_type("prim", name = "i32", cxx = "int32_t")
-ty$u32 <- td_type("prim", name = "u32", cxx = "uint32_t")
-ty$f64 <- td_type("prim", name = "f64", cxx = "double")
-ty$bool <- td_type("prim", name = "bool", cxx = "bool")
+ty$i32 <- psl_type("prim", name = "i32", cxx = "int32_t")
+ty$u32 <- psl_type("prim", name = "u32", cxx = "uint32_t")
+ty$f64 <- psl_type("prim", name = "f64", cxx = "double")
+ty$bool <- psl_type("prim", name = "bool", cxx = "bool")
 
-ty$ptr_mut <- function(elem) td_type("ptr", mut = "mut", elem = elem)
-ty$ptr_const <- function(elem) td_type("ptr", mut = "const", elem = elem)
-ty$rcpp_vector_mut <- function(elem) td_type("rcpp_vector", mut = "mut", elem = elem)
-ty$rcpp_vector_const <- function(elem) td_type("rcpp_vector", mut = "const", elem = elem)
-ty$rcpp_matrix_mut <- function(elem) td_type("rcpp_matrix", mut = "mut", elem = elem)
-ty$rcpp_matrix_const <- function(elem) td_type("rcpp_matrix", mut = "const", elem = elem)
+ty$mut_ptr   <- function(elem) psl_type("ptr", mut = "mut", elem = elem)
+ty$const_ptr <- function(elem) psl_type("ptr", mut = "const", elem = elem)
+ty$mut_rcpp_vector   <- function(elem) psl_type("rcpp_vector", mut = "mut", elem = elem)
+ty$const_rcpp_vector <- function(elem) psl_type("rcpp_vector", mut = "const", elem = elem)
+ty$mut_rcpp_matrix   <- function(elem) psl_type("rcpp_matrix", mut = "mut", elem = elem)
+ty$const_rcpp_matrix <- function(elem) psl_type("rcpp_matrix", mut = "const", elem = elem)
 
-td_expr <- function(code, type = NULL) {
-  structure(list(code = code, type = type), class = "td_expr")
+psl_expr <- function(code, type = NULL) {
+  structure(list(code = code, type = type), class = "psl_expr")
 }
 
-td_code <- function(x) {
-  if (inherits(x, "td_expr")) return(x$code)
-  if (inherits(x, "td_ptr")) return(x$base)
-  if (inherits(x, "td_rcpp_vector") || inherits(x, "td_rcpp_matrix")) return(x$name)
+psl_code <- function(x) {
+  if (inherits(x, "psl_expr")) return(x$code)
+  if (inherits(x, "psl_ptr")) return(x$base)
+  if (inherits(x, "psl_rcpp_vector") || inherits(x, "psl_rcpp_matrix")) return(x$name)
   if (is.numeric(x) && length(x) == 1) return(as.character(x))
   if (is.character(x) && length(x) == 1) return(x)
   stop("Unsupported value in codegen: ", paste(class(x), collapse = "/"), call. = FALSE)
 }
 
-td_const <- function(value, type) {
+psl_const <- function(value, type) {
   stopifnot(length(value) == 1)
-  if (!inherits(type, "td_type") || type$kind != "prim") stop("const() requires a primitive type", call. = FALSE)
-  if (type$name == "u32")  return(td_expr(paste0(as.integer(value), "U"), type))
-  if (type$name == "i32")  return(td_expr(as.character(as.integer(value)), type))
-  if (type$name == "bool") return(td_expr(if (isTRUE(value)) "true" else "false", type))
-  td_expr(as.character(value), type)
+  if (!inherits(type, "psl_type") || type$kind != "prim") stop("const() requires a primitive type", call. = FALSE)
+  if (type$name == "u32")  return(psl_expr(paste0(as.integer(value), "U"), type))
+  if (type$name == "i32")  return(psl_expr(as.character(as.integer(value)), type))
+  if (type$name == "bool") return(psl_expr(if (isTRUE(value)) "true" else "false", type))
+  psl_expr(as.character(value), type)
 }
 
-Ops.td_expr <- function(e1, e2 = NULL) {
+Ops.psl_expr <- function(e1, e2 = NULL) {
   op <- .Generic
 
   if (missing(e2)) {
     if (op %in% c("+", "-")) {
-      return(td_expr(paste0("(", op, td_code(e1), ")"), e1$type))
+      return(psl_expr(paste0("(", op, psl_code(e1), ")"), e1$type))
     }
-    stop("Unsupported unary op for td_expr: ", op, call. = FALSE)
+    stop("Unsupported unary op for psl_expr: ", op, call. = FALSE)
   }
 
   if (op %in% c("+", "-", "*", "/", "%/%", "%%", "<", "<=", ">", ">=", "==", "!=")) {
-    left <- td_code(e1)
-    right <- td_code(e2)
-    out_type <- e1$type %||% (if (inherits(e2, "td_expr")) e2$type else NULL)
+    left <- psl_code(e1)
+    right <- psl_code(e2)
+    out_type <- e1$type %||% (if (inherits(e2, "psl_expr")) e2$type else NULL)
     if (op %in% c("<", "<=", ">", ">=", "==", "!=")) out_type <- ty$bool
     cxx_op <- switch(op, "%/%" = "/", "%%" = "%", op)
-    return(td_expr(paste0("(", left, " ", cxx_op, " ", right, ")"), out_type))
+    return(psl_expr(paste0("(", left, " ", cxx_op, " ", right, ")"), out_type))
   }
 
   if (op %in% c("&", "|")) {
-    left <- td_code(e1)
-    right <- td_code(e2)
+    left <- psl_code(e1)
+    right <- psl_code(e2)
     cxx_op <- if (op == "&") "&&" else "||"
-    return(td_expr(paste0("(", left, " ", cxx_op, " ", right, ")"), ty$bool))
+    return(psl_expr(paste0("(", left, " ", cxx_op, " ", right, ")"), ty$bool))
   }
 
-  stop("Unsupported op for td_expr: ", op, call. = FALSE)
+  stop("Unsupported op for psl_expr: ", op, call. = FALSE)
 }
 
-td_ptr <- function(name, type) {
-  stopifnot(inherits(type, "td_type"), type$kind == "ptr")
-  structure(list(name = name, base = name, type = type), class = "td_ptr")
+psl_ptr <- function(name, type) {
+  stopifnot(inherits(type, "psl_type"), type$kind == "ptr")
+  structure(list(name = name, base = name, type = type), class = "psl_ptr")
 }
 
-td_ptr_base <- function(base, type) {
-  stopifnot(inherits(type, "td_type"), type$kind == "ptr")
-  structure(list(name = NULL, base = base, type = type), class = "td_ptr")
+psl_ptr_base <- function(base, type) {
+  stopifnot(inherits(type, "psl_type"), type$kind == "ptr")
+  structure(list(name = NULL, base = base, type = type), class = "psl_ptr")
 }
 
-`[.td_ptr` <- function(x, i) {
+`[.psl_ptr` <- function(x, i) {
   elem <- x$type$elem
   if (is.null(elem)) stop("Cannot index void* pointer", call. = FALSE)
-  td_expr(paste0(x$base, "[", td_code(i), "]"), elem)
+  psl_expr(paste0(x$base, "[", psl_code(i), "]"), elem)
 }
 
-`[<-.td_ptr` <- function(x, i, value) {
+`[<-.psl_ptr` <- function(x, i, value) {
   ctx <- .tinydsl_state$ctx
   if (is.null(ctx)) stop("Pointer assignment used outside tinydsl render context", call. = FALSE)
-  ctx$emit(paste0(x$base, "[", td_code(i), "] = ", td_code(value), ";"))
+  ctx$emit(paste0(x$base, "[", psl_code(i), "] = ", psl_code(value), ";"))
   x
 }
 
-td_rcpp_vector <- function(name, type) {
-  stopifnot(inherits(type, "td_type"), type$kind == "rcpp_vector")
-  structure(list(name = name, type = type), class = "td_rcpp_vector")
+psl_rcpp_vector <- function(name, type) {
+  stopifnot(inherits(type, "psl_type"), type$kind == "rcpp_vector")
+  structure(list(name = name, type = type), class = "psl_rcpp_vector")
 }
 
-td_rcpp_matrix <- function(name, type) {
-  stopifnot(inherits(type, "td_type"), type$kind == "rcpp_matrix")
-  structure(list(name = name, type = type), class = "td_rcpp_matrix")
+psl_rcpp_matrix <- function(name, type) {
+  stopifnot(inherits(type, "psl_type"), type$kind == "rcpp_matrix")
+  structure(list(name = name, type = type), class = "psl_rcpp_matrix")
 }
 
 cast <- function(x, target_type) {
-  if (!inherits(target_type, "td_type")) stop("target_type must be a tinydsl type", call. = FALSE)
-  if ((inherits(x, "td_rcpp_vector") || inherits(x, "td_rcpp_matrix")) && target_type$kind == "ptr") {
+  if (!inherits(target_type, "psl_type")) stop("target_type must be a tinydsl type", call. = FALSE)
+  if ((inherits(x, "psl_rcpp_vector") || inherits(x, "psl_rcpp_matrix")) && target_type$kind == "ptr") {
     elem <- target_type$elem
     elem_cxx <- if (is.null(elem)) "void" else cxx_type(elem)
-    return(td_ptr_base(paste0("reinterpret_cast<", elem_cxx, "*>(", x$name, ".begin())"), target_type))
+    return(psl_ptr_base(paste0("reinterpret_cast<", elem_cxx, "*>(", x$name, ".begin())"), target_type))
   }
-  if (inherits(x, "td_expr") && target_type$kind == "prim") {
-    return(td_expr(paste0("(", cxx_type(target_type), ")(", td_code(x), ")"), target_type))
+  if (inherits(x, "psl_expr") && target_type$kind == "prim") {
+    return(psl_expr(paste0("(", cxx_type(target_type), ")(", psl_code(x), ")"), target_type))
   }
   stop("Unsupported cast() combination", call. = FALSE)
 }
 
 len <- function(x) {
-  if (inherits(x, "td_rcpp_vector") || inherits(x, "td_rcpp_matrix")) {
-    return(td_expr(paste0(x$name, ".size()"), ty$u32))
+  if (inherits(x, "psl_rcpp_vector") || inherits(x, "psl_rcpp_matrix")) {
+    return(psl_expr(paste0(x$name, ".size()"), ty$u32))
   }
   stop("len() only supports Rcpp vectors/matrices", call. = FALSE)
 }
@@ -150,19 +150,22 @@ raw_expr <- function(fmt, out_type, ...) {
   nms <- names(args)
   if (!is.null(nms) && any(nzchar(nms))) {
     for (nm in nms) {
-      out <- gsub(paste0("$", nm), td_code(args[[nm]]), out, fixed = TRUE)
+      out <- gsub(paste0("$", nm), psl_code(args[[nm]]), out, fixed = TRUE)
     }
   }
   for (idx in seq_along(args)) {
-    out <- gsub(paste0("$", idx - 1L), td_code(args[[idx]]), out, fixed = TRUE)
+    out <- gsub(paste0("$", idx - 1L), psl_code(args[[idx]]), out, fixed = TRUE)
   }
-  td_expr(out, out_type)
+  psl_expr(out, out_type)
 }
 
-td_ctx <- function() {
+psl_ctx <- function(dialect = NULL, device = FALSE, func_kind = NULL) {
   ctx <- new.env(parent = emptyenv())
   ctx$lines <- character()
   ctx$indent <- 1L
+  ctx$dialect <- dialect
+  ctx$device <- isTRUE(device)
+  ctx$func_kind <- func_kind
   ctx$emit <- function(line = "") {
     prefix <- paste(rep("    ", ctx$indent), collapse = "")
     ctx$lines <- c(ctx$lines, paste0(prefix, line))
@@ -177,6 +180,14 @@ td_ctx <- function() {
   ctx
 }
 
+psl_require_ctx <- function(feature, dialect = NULL, device = FALSE) {
+  ctx <- .tinydsl_state$ctx
+  if (is.null(ctx)) stop(feature, " used outside tinydsl render context", call. = FALSE)
+  if (!is.null(dialect) && !identical(ctx$dialect, dialect)) stop(feature, " requires dialect='", dialect, "'", call. = FALSE)
+  if (isTRUE(device) && !isTRUE(ctx$device)) stop(feature, " requires device code (kernel or device fn)", call. = FALSE)
+  ctx
+}
+
 let <- function(sym, value, type = NULL) {
   sym <- substitute(sym)
   if (!is.symbol(sym)) stop("let() first argument must be a symbol", call. = FALSE)
@@ -187,11 +198,11 @@ let <- function(sym, value, type = NULL) {
     if (is.null(value$type)) stop("let() requires a type or a typed value", call. = FALSE)
     type <- value$type
   }
-  ctx$emit(paste0(cxx_type(type), " ", name, " = ", td_code(value), ";"))
-  if (type$kind == "prim") return(td_expr(name, type))
-  if (type$kind == "ptr") return(td_ptr(name, type))
-  if (type$kind == "rcpp_vector") return(td_rcpp_vector(name, type))
-  if (type$kind == "rcpp_matrix") return(td_rcpp_matrix(name, type))
+  ctx$emit(paste0(cxx_type(type), " ", name, " = ", psl_code(value), ";"))
+  if (type$kind == "prim") return(psl_expr(name, type))
+  if (type$kind == "ptr") return(psl_ptr(name, type))
+  if (type$kind == "rcpp_vector") return(psl_rcpp_vector(name, type))
+  if (type$kind == "rcpp_matrix") return(psl_rcpp_matrix(name, type))
   stop("Unsupported let() type kind: ", type$kind, call. = FALSE)
 }
 
@@ -199,7 +210,7 @@ if_ <- function(cond, expr) {
   expr_quoted <- substitute(expr)
   ctx <- .tinydsl_state$ctx
   if (is.null(ctx)) stop("if_() used outside tinydsl render context", call. = FALSE)
-  ctx$emit(paste0("if (", td_code(cond), ") {"))
+  ctx$emit(paste0("if (", psl_code(cond), ") {"))
   ctx$with_indent(eval(expr_quoted, envir = parent.frame()))
   ctx$emit("}")
   invisible(NULL)
@@ -213,12 +224,12 @@ for_ <- function(sym, lo, hi, step = NULL, expr) {
   if (!is.symbol(sym)) stop("for_() first argument must be a symbol", call. = FALSE)
   name <- as.character(sym)
 
-  if (is.null(step)) step <- td_const(1, ty$u32)
+  if (is.null(step)) step <- psl_const(1, ty$u32)
 
-  ctx$emit(paste0("for (uint32_t ", name, " = ", td_code(lo), "; ", name, " < ", td_code(hi), "; ", name, " += ", td_code(step), ") {"))
+  ctx$emit(paste0("for (uint32_t ", name, " = ", psl_code(lo), "; ", name, " < ", psl_code(hi), "; ", name, " += ", psl_code(step), ") {"))
   ctx$with_indent({
     env <- new.env(parent = parent.frame())
-    env[[name]] <- td_expr(name, ty$u32)
+    env[[name]] <- psl_expr(name, ty$u32)
     eval(expr_quoted, envir = env)
   })
   ctx$emit("}")
@@ -231,7 +242,7 @@ ret <- function(value = NULL) {
   if (is.null(value)) {
     ctx$emit("return;")
   } else {
-    ctx$emit(paste0("return ", td_code(value), ";"))
+    ctx$emit(paste0("return ", psl_code(value), ";"))
   }
   invisible(NULL)
 }
@@ -242,7 +253,7 @@ raw_stmt <- function(fmt, ...) {
   args <- list(...)
   out <- fmt
   for (idx in seq_along(args)) {
-    out <- gsub(paste0("$", idx - 1L), td_code(args[[idx]]), out, fixed = TRUE)
+    out <- gsub(paste0("$", idx - 1L), psl_code(args[[idx]]), out, fixed = TRUE)
   }
   ctx$emit(out)
   invisible(NULL)
@@ -252,7 +263,7 @@ cuda_launch <- function(kernel, grid, block, ..., kernel_name = NULL, sync = TRU
   ctx <- .tinydsl_state$ctx
   if (is.null(ctx)) stop("cuda_launch() used outside tinydsl render context", call. = FALSE)
 
-  if (!inherits(kernel, "td_func") || !identical(kernel$kind, "kernel")) {
+  if (!inherits(kernel, "psl_func") || !identical(kernel$kind, "kernel")) {
     stop("cuda_launch() requires a tinydsl kernel() as the first argument", call. = FALSE)
   }
 
@@ -308,16 +319,16 @@ cuda_launch <- function(kernel, grid, block, ..., kernel_name = NULL, sync = TRU
     arg <- args_by_param[[nm]]
 
     if (pty$kind == "prim") {
-      if (inherits(arg, "td_rcpp_vector") || inherits(arg, "td_rcpp_matrix")) {
+      if (inherits(arg, "psl_rcpp_vector") || inherits(arg, "psl_rcpp_matrix")) {
         stop("Kernel argument '", nm, "' expects a primitive, got an Rcpp vector/matrix", call. = FALSE)
       }
-      call_args[[nm]] <- td_code(arg)
+      call_args[[nm]] <- psl_code(arg)
       next
     }
 
     if (pty$kind != "ptr") stop("Unsupported kernel param kind in cuda_launch(): ", pty$kind, call. = FALSE)
 
-    if (inherits(arg, "td_rcpp_vector") || inherits(arg, "td_rcpp_matrix")) {
+    if (inherits(arg, "psl_rcpp_vector") || inherits(arg, "psl_rcpp_matrix")) {
       if (identical(pty$mut, "mut") && identical(arg$type$mut, "const")) {
         stop("Kernel argument '", nm, "' expects a mutable pointer but got a const Rcpp container", call. = FALSE)
       }
@@ -335,9 +346,9 @@ cuda_launch <- function(kernel, grid, block, ..., kernel_name = NULL, sync = TRU
       host_ptr_ty <- if (needs_copy_back) paste0(elem_cxx, "*") else paste0("const ", elem_cxx, "*")
       host_ptr_cast <- if (needs_copy_back) elem_cxx else paste0("const ", elem_cxx)
 
-      h_var <- paste0("td_h_", nm)
-      d_var <- paste0("td_d_", nm)
-      bytes_var <- paste0("td_bytes_", nm)
+      h_var <- paste0("psl_h_", nm)
+      d_var <- paste0("psl_d_", nm)
+      bytes_var <- paste0("psl_bytes_", nm)
       n_elems_expr <- paste0(arg$name, ".size()")
 
       allocs[[nm]] <- list(
@@ -356,35 +367,35 @@ cuda_launch <- function(kernel, grid, block, ..., kernel_name = NULL, sync = TRU
       next
     }
 
-    call_args[[nm]] <- td_code(arg)
+    call_args[[nm]] <- psl_code(arg)
   }
 
   ctx$emit("{")
   ctx$with_indent({
-    ctx$emit("cudaError_t td_err;")
+    ctx$emit("cudaError_t psl_err;")
 
     for (a in allocs) {
       ctx$emit(paste0(a$host_ptr_ty, " ", a$h_var, " = reinterpret_cast<", a$host_ptr_cast, "*>(", a$container_name, ".begin());"))
       ctx$emit(paste0(a$elem_cxx, "* ", a$d_var, " = nullptr;"))
       ctx$emit(paste0("size_t ", a$bytes_var, " = (size_t)", a$n_elems_expr, " * sizeof(", a$elem_cxx, ");"))
-      ctx$emit(paste0("td_err = cudaMalloc((void**)&", a$d_var, ", ", a$bytes_var, ");"))
-      ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
-      ctx$emit(paste0("td_err = cudaMemcpy(", a$d_var, ", ", a$h_var, ", ", a$bytes_var, ", cudaMemcpyHostToDevice);"))
-      ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+      ctx$emit(paste0("psl_err = cudaMalloc((void**)&", a$d_var, ", ", a$bytes_var, ");"))
+      ctx$emit("if (psl_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(psl_err));")
+      ctx$emit(paste0("psl_err = cudaMemcpy(", a$d_var, ", ", a$h_var, ", ", a$bytes_var, ", cudaMemcpyHostToDevice);"))
+      ctx$emit("if (psl_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(psl_err));")
       ctx$emit("")
     }
 
-    ctx$emit(paste0(kernel_name, "<<<", td_code(grid), ", ", td_code(block), ">>>(", paste(unlist(call_args, use.names = FALSE), collapse = ", "), ");"))
+    ctx$emit(paste0(kernel_name, "<<<", psl_code(grid), ", ", psl_code(block), ">>>(", paste(unlist(call_args, use.names = FALSE), collapse = ", "), ");"))
 
     if (isTRUE(sync)) {
-      ctx$emit("td_err = cudaDeviceSynchronize();")
-      ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+      ctx$emit("psl_err = cudaDeviceSynchronize();")
+      ctx$emit("if (psl_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(psl_err));")
     }
 
     for (a in allocs) {
       if (isTRUE(a$needs_copy_back)) {
-        ctx$emit(paste0("td_err = cudaMemcpy(", a$h_var, ", ", a$d_var, ", ", a$bytes_var, ", cudaMemcpyDeviceToHost);"))
-        ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+        ctx$emit(paste0("psl_err = cudaMemcpy(", a$h_var, ", ", a$d_var, ", ", a$bytes_var, ", cudaMemcpyDeviceToHost);"))
+        ctx$emit("if (psl_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(psl_err));")
       }
       ctx$emit(paste0("cudaFree(", a$d_var, ");"))
       ctx$emit("")
@@ -394,8 +405,8 @@ cuda_launch <- function(kernel, grid, block, ..., kernel_name = NULL, sync = TRU
   invisible(NULL)
 }
 
-td_func <- function(kind, params, body, host = FALSE, device = FALSE, force_inline = FALSE, ret = NULL) {
-  stopifnot(inherits(params, "td_params"))
+psl_func <- function(kind, params, body, host = FALSE, device = FALSE, force_inline = FALSE, ret = NULL) {
+  stopifnot(inherits(params, "psl_params"))
   if (!is.function(body)) stop("body must be a function", call. = FALSE)
   structure(
     list(
@@ -407,7 +418,7 @@ td_func <- function(kind, params, body, host = FALSE, device = FALSE, force_inli
       force_inline = isTRUE(force_inline),
       ret = ret
     ),
-    class = "td_func"
+    class = "psl_func"
   )
 }
 
@@ -415,23 +426,25 @@ Params <- function(...) {
   types <- list(...)
   if (length(types) == 0) stop("Params(...) requires at least one parameter", call. = FALSE)
   if (is.null(names(types)) || any(names(types) == "")) stop("Params(...) requires named arguments", call. = FALSE)
-  for (nm in names(types)) if (!inherits(types[[nm]], "td_type")) stop("Param '", nm, "' must be a tinydsl type", call. = FALSE)
-  structure(types, class = "td_params")
+  for (nm in names(types)) if (!inherits(types[[nm]], "psl_type")) stop("Param '", nm, "' must be a tinydsl type", call. = FALSE)
+  structure(types, class = "psl_params")
 }
 
 kernel <- function(params, body = NULL, raw_attrs = NULL) {
   if (is.null(body)) return(function(body) kernel(params, body = body, raw_attrs = raw_attrs))
-  td_func("kernel", params, body)
+  psl_func("kernel", params, body)
 }
 
 fn <- function(params, body = NULL, host = FALSE, device = FALSE, force_inline = FALSE, ret = NULL, raw_attrs = NULL) {
   if (is.null(body)) return(function(body) fn(params, body = body, host = host, device = device, force_inline = force_inline, ret = ret, raw_attrs = raw_attrs))
-  td_func("fn", params, body, host = host, device = device, force_inline = force_inline, ret = ret)
+  psl_func("fn", params, body, host = host, device = device, force_inline = force_inline, ret = ret)
 }
 
-compile_func_body <- function(func, export_name) {
-  stopifnot(inherits(func, "td_func"))
-  ctx <- td_ctx()
+compile_func_body <- function(func, export_name, dialect = c("cpp", "cuda")) {
+  dialect <- match.arg(dialect)
+  stopifnot(inherits(func, "psl_func"))
+  is_device <- identical(dialect, "cuda") && (identical(func$kind, "kernel") || (identical(func$kind, "fn") && isTRUE(func$device)))
+  ctx <- psl_ctx(dialect = dialect, device = is_device, func_kind = func$kind)
   old <- .tinydsl_state$ctx
   .tinydsl_state$ctx <- ctx
   on.exit({ .tinydsl_state$ctx <- old }, add = TRUE)
@@ -441,13 +454,13 @@ compile_func_body <- function(func, export_name) {
   for (nm in names(params)) {
     pty <- params[[nm]]
     if (pty$kind == "prim") {
-      arg_objs[[nm]] <- td_expr(nm, pty)
+      arg_objs[[nm]] <- psl_expr(nm, pty)
     } else if (pty$kind == "ptr") {
-      arg_objs[[nm]] <- td_ptr(nm, pty)
+      arg_objs[[nm]] <- psl_ptr(nm, pty)
     } else if (pty$kind == "rcpp_vector") {
-      arg_objs[[nm]] <- td_rcpp_vector(nm, pty)
+      arg_objs[[nm]] <- psl_rcpp_vector(nm, pty)
     } else if (pty$kind == "rcpp_matrix") {
-      arg_objs[[nm]] <- td_rcpp_matrix(nm, pty)
+      arg_objs[[nm]] <- psl_rcpp_matrix(nm, pty)
     } else {
       stop("Unsupported param kind: ", pty$kind, call. = FALSE)
     }
@@ -459,7 +472,7 @@ compile_func_body <- function(func, export_name) {
 
 func_signature <- function(func, code_name, dialect = c("cpp", "cuda")) {
   dialect <- match.arg(dialect)
-  stopifnot(inherits(func, "td_func"))
+  stopifnot(inherits(func, "psl_func"))
   name <- code_name
   ret <- if (func$kind == "kernel") "void" else if (is.null(func$ret)) "void" else cxx_type(func$ret)
 
@@ -479,6 +492,75 @@ func_signature <- function(func, code_name, dialect = c("cpp", "cuda")) {
   list(attrs = attrs, ret = ret, name = name, param_lines = param_lines)
 }
 
+psl_sync_threads <- function() {
+  ctx <- psl_require_ctx("sync_threads()", dialect = "cuda", device = TRUE)
+  ctx$emit("__syncthreads();")
+  invisible(NULL)
+}
+
+psl_full_warp_mask <- function() psl_expr("0xFFFFFFFFu", ty$u32)
+psl_warp_size <- function() psl_expr("((uint32_t)warpSize)", ty$u32)
+psl_lane_id <- function() psl_expr("((uint32_t)(threadIdx.x % warpSize))", ty$u32)
+psl_warp_id <- function() psl_expr("((uint32_t)(threadIdx.x / warpSize))", ty$u32)
+
+psl_shared_array <- function(sym, elem_type, n) {
+  ctx <- psl_require_ctx("shared_array()", dialect = "cuda", device = TRUE)
+  sym <- substitute(sym)
+  if (!is.symbol(sym)) stop("shared_array() first argument must be a symbol", call. = FALSE)
+  name <- as.character(sym)
+  if (!inherits(elem_type, "psl_type") || elem_type$kind != "prim") stop("shared_array() elem_type must be a primitive tinydsl type", call. = FALSE)
+  if (!(is.numeric(n) && length(n) == 1 && is.finite(n) && n > 0 && n == as.integer(n))) {
+    stop("shared_array() requires a positive integer 'n' known at compile time", call. = FALSE)
+  }
+  ctx$emit(paste0("__shared__ ", cxx_type(elem_type), " ", name, "[", as.integer(n), "];"))
+  psl_ptr_base(name, ty$mut_ptr(elem_type))
+}
+
+psl_sync_warp <- function(mask = NULL) {
+  ctx <- psl_require_ctx("sync_warp()", dialect = "cuda", device = TRUE)
+  if (is.null(mask)) mask <- psl$full_warp_mask()
+  ctx$emit(paste0("__syncwarp(", psl_code(mask), ");"))
+  invisible(NULL)
+}
+
+psl_ballot_sync <- function(mask, pred) {
+  psl_require_ctx("ballot_sync()", dialect = "cuda", device = TRUE)
+  psl_expr(paste0("__ballot_sync(", psl_code(mask), ", ", psl_code(pred), ")"), ty$u32)
+}
+
+psl_shfl_down_sync <- function(mask, var, delta, width = NULL) {
+  psl_require_ctx("shfl_down_sync()", dialect = "cuda", device = TRUE)
+  if (!inherits(var, "psl_expr") || is.null(var$type) || !inherits(var$type, "psl_type") || var$type$kind != "prim") {
+    stop("shfl_down_sync() requires a typed primitive psl_expr for var", call. = FALSE)
+  }
+  if (!(var$type$name %in% c("i32", "u32"))) stop("shfl_down_sync() only supports i32/u32 currently", call. = FALSE)
+  args <- c(psl_code(mask), psl_code(var), psl_code(delta))
+  if (!is.null(width)) args <- c(args, psl_code(width))
+  psl_expr(paste0("__shfl_down_sync(", paste(args, collapse = ", "), ")"), var$type)
+}
+
+psl_shfl_up_sync <- function(mask, var, delta, width = NULL) {
+  psl_require_ctx("shfl_up_sync()", dialect = "cuda", device = TRUE)
+  if (!inherits(var, "psl_expr") || is.null(var$type) || !inherits(var$type, "psl_type") || var$type$kind != "prim") {
+    stop("shfl_up_sync() requires a typed primitive psl_expr for var", call. = FALSE)
+  }
+  if (!(var$type$name %in% c("i32", "u32"))) stop("shfl_up_sync() only supports i32/u32 currently", call. = FALSE)
+  args <- c(psl_code(mask), psl_code(var), psl_code(delta))
+  if (!is.null(width)) args <- c(args, psl_code(width))
+  psl_expr(paste0("__shfl_up_sync(", paste(args, collapse = ", "), ")"), var$type)
+}
+
+psl_shfl_xor_sync <- function(mask, var, lane_mask, width = NULL) {
+  psl_require_ctx("shfl_xor_sync()", dialect = "cuda", device = TRUE)
+  if (!inherits(var, "psl_expr") || is.null(var$type) || !inherits(var$type, "psl_type") || var$type$kind != "prim") {
+    stop("shfl_xor_sync() requires a typed primitive psl_expr for var", call. = FALSE)
+  }
+  if (!(var$type$name %in% c("i32", "u32"))) stop("shfl_xor_sync() only supports i32/u32 currently", call. = FALSE)
+  args <- c(psl_code(mask), psl_code(var), psl_code(lane_mask))
+  if (!is.null(width)) args <- c(args, psl_code(width))
+  psl_expr(paste0("__shfl_xor_sync(", paste(args, collapse = ", "), ")"), var$type)
+}
+
 render_one_decl <- function(sig, with_semicolon = TRUE) {
   lines <- character()
   for (a in sig$attrs) lines <- c(lines, a)
@@ -493,7 +575,7 @@ render_one_decl <- function(sig, with_semicolon = TRUE) {
 render <- function(entry_points, headers = character(), bind = FALSE, bind_name = NULL, bind_style = c("none", "rcpp_module", "rcpp_export"), dialect = c("cpp", "cuda")) {
   dialect <- match.arg(dialect)
   bind_style <- match.arg(bind_style)
-  if (inherits(entry_points, "td_func")) {
+  if (inherits(entry_points, "psl_func")) {
     entry_points <- list(entry_points)
   }
   if (!is.list(entry_points) || length(entry_points) == 0) stop("entry_points must be a non-empty list", call. = FALSE)
@@ -505,7 +587,7 @@ render <- function(entry_points, headers = character(), bind = FALSE, bind_name 
   for (i in seq_along(entry_points)) {
     func <- entry_points[[i]]
     name <- export_names[[i]]
-    if (!inherits(func, "td_func")) stop("All entry points must be tinydsl functions", call. = FALSE)
+    if (!inherits(func, "psl_func")) stop("All entry points must be tinydsl functions", call. = FALSE)
     export_name <- if (!is.na(name) && nzchar(name)) name else NULL
     code_name <- export_name %||% paste0(if (func$kind == "kernel") "kernel" else "fn", "_", i)
     entries[[i]] <- list(func = func, export_name = export_name, code_name = code_name)
@@ -542,7 +624,7 @@ render <- function(entry_points, headers = character(), bind = FALSE, bind_name 
       out <- c(out, "// [[Rcpp::export]]")
     }
     out <- c(out, render_one_decl(sig, with_semicolon = FALSE))
-    body_lines <- compile_func_body(e$func, e$export_name)
+    body_lines <- compile_func_body(e$func, e$export_name, dialect = dialect)
     out <- c(out, body_lines, "}", "")
   }
 
@@ -551,7 +633,7 @@ render <- function(entry_points, headers = character(), bind = FALSE, bind_name 
     for (e in internal) {
       sig <- func_signature(e$func, e$code_name, dialect = dialect)
       out <- c(out, render_one_decl(sig, with_semicolon = FALSE))
-      body_lines <- compile_func_body(e$func, e$export_name)
+      body_lines <- compile_func_body(e$func, e$export_name, dialect = dialect)
       out <- c(out, body_lines, "}", "")
     }
     out <- c(out, "} // namespace internal", "")
@@ -586,7 +668,7 @@ split_flags <- function(x) {
 }
 
 cpp_type_for <- function(type) {
-  stopifnot(inherits(type, "td_type"))
+  stopifnot(inherits(type, "psl_type"))
   if (type$kind != "prim") stop("cpp_type_for only supports primitive types", call. = FALSE)
   if (type$name == "i32") return("int32_t")
   if (type$name == "u32") return("uint32_t")
@@ -596,7 +678,7 @@ cpp_type_for <- function(type) {
 }
 
 rcpp_sexp_to_cpp <- function(sexp_name, param_name, type) {
-  stopifnot(inherits(type, "td_type"))
+  stopifnot(inherits(type, "psl_type"))
   var_name <- paste0(param_name, "_")
   if (type$kind == "prim") {
     cpp_ty <- cpp_type_for(type)
@@ -624,12 +706,12 @@ rcpp_sexp_to_cpp <- function(sexp_name, param_name, type) {
 
 rcpp_wrap_return <- function(value_expr, ret_type) {
   if (is.null(ret_type)) return(c(paste0(value_expr, ";"), "return R_NilValue;"))
-  stopifnot(inherits(ret_type, "td_type"))
+  stopifnot(inherits(ret_type, "psl_type"))
   return(c(paste0("auto res = ", value_expr, ";"), "return Rcpp::wrap(res);"))
 }
 
 
-compile_cuda <- function(entry_points, headers = c("Rcpp.h", "cuda_runtime.h", "cstdint"), wrapper_prefix = "td_call_", verbose = FALSE) {
+compile_cuda <- function(entry_points, headers = c("Rcpp.h", "cuda_runtime.h", "cstdint"), wrapper_prefix = "psl_call_", verbose = FALSE) {
   if (!requireNamespace("Rcpp", quietly = TRUE)) stop("Rcpp is required for compile_cuda()", call. = FALSE)
 
   nvcc <- Sys.which("nvcc")
@@ -653,7 +735,7 @@ compile_cuda <- function(entry_points, headers = c("Rcpp.h", "cuda_runtime.h", "
   callable <- character()
   for (nm in exported) {
     func <- entry_points[[nm]]
-    if (!inherits(func, "td_func")) stop("All entry points must be tinydsl functions", call. = FALSE)
+    if (!inherits(func, "psl_func")) stop("All entry points must be tinydsl functions", call. = FALSE)
     if (identical(func$kind, "kernel")) next
     callable <- c(callable, nm)
 
@@ -682,11 +764,11 @@ compile_cuda <- function(entry_points, headers = c("Rcpp.h", "cuda_runtime.h", "
   wrapper_lines <- c(wrapper_lines, "}", "")
   code <- paste0(code, "\n", paste(wrapper_lines, collapse = "\n"))
 
-  td <- tempfile("tinydsl_cuda_")
-  dir.create(td)
+  psl <- tempfile("tinydsl_cuda_")
+  dir.create(psl)
 
-  cu_path <- file.path(td, "tinydsl.cu")
-  so_path <- file.path(td, paste0("tinydsl", .Platform$dynlib.ext))
+  cu_path <- file.path(psl, "tinydsl.cu")
+  so_path <- file.path(psl, paste0("tinydsl", .Platform$dynlib.ext))
   writeLines(code, cu_path, useBytes = TRUE)
 
   # Get R include paths
@@ -815,34 +897,52 @@ compile_cuda <- function(entry_points, headers = c("Rcpp.h", "cuda_runtime.h", "
   funs
 }
 
-td <- new.env(parent = emptyenv())
-td$ty <- ty
-td$Params <- Params
-td$kernel <- kernel
-td$fn <- fn
-td$render <- render
-td$const <- td_const
-td$let <- let
-td$if_ <- if_
-td$for_ <- for_
-td$raw_stmt <- raw_stmt
-td$cuda_launch <- cuda_launch
-td$raw_expr <- raw_expr
-td$cast <- cast
-td$len  <- len
-td$ret <- ret
-td$compile_cpp <- compile_cpp
-td$compile_cuda <- compile_cuda
+psl <- new.env(parent = emptyenv())
+psl$ty <- ty
+psl$Params <- Params
+psl$kernel <- kernel
+psl$fn <- fn
+psl$ret <- ret
+psl$render <- render
+psl$let <- let
+psl$const <- psl_const
+psl$cast <- cast
+psl$shared_array <- psl_shared_array
+psl$if_ <- if_
+psl$for_ <- for_
+psl$len  <- len
+psl$raw_stmt <- raw_stmt
+psl$raw_expr <- raw_expr
+psl$cuda_launch <- cuda_launch
+psl$compile_cpp <- compile_cpp
+psl$compile_cuda <- compile_cuda
 
-td$block_idx_x <- function() td_expr("blockIdx.x", ty$u32)
-td$block_idx_y <- function() td_expr("blockIdx.y", ty$u32)
-td$block_idx_z <- function() td_expr("blockIdx.z", ty$u32)
+psl$sync_threads <- psl_sync_threads
+psl$full_warp_mask <- psl_full_warp_mask
+psl$warp_size <- psl_warp_size
+psl$lane_id <- psl_lane_id
+psl$warp_id <- psl_warp_id
+psl$sync_warp <- psl_sync_warp
+psl$ballot_sync <- psl_ballot_sync
+psl$shfl_down_sync  <- psl_shfl_down_sync 
+psl$shfl_up_sync <- psl_shfl_up_sync
+psl$shfl_xor_sync  <- psl_shfl_xor_sync 
 
+psl$block_idx_x <- function() psl_expr("blockIdx.x", ty$u32)
+psl$block_idx_y <- function() psl_expr("blockIdx.y", ty$u32)
+psl$block_idx_z <- function() psl_expr("blockIdx.z", ty$u32)
 
-td$block_dim_x <- function() td_expr("blockDim.x", ty$u32)
-td$block_dim_y <- function() td_expr("blockDim.y", ty$u32)
-td$block_dim_z <- function() td_expr("blockDim.z", ty$u32)
+psl$block_dim_x <- function() psl_expr("blockDim.x", ty$u32)
+psl$block_dim_y <- function() psl_expr("blockDim.y", ty$u32)
+psl$block_dim_z <- function() psl_expr("blockDim.z", ty$u32)
 
-td$thread_idx_x <- function() td_expr("threadIdx.x", ty$u32)
-td$thread_idx_y <- function() td_expr("threadIdx.y", ty$u32)
-td$thread_idx_z <- function() td_expr("threadIdx.z", ty$u32)
+psl$thread_idx_x <- function() psl_expr("threadIdx.x", ty$u32)
+psl$thread_idx_y <- function() psl_expr("threadIdx.y", ty$u32)
+psl$thread_idx_z <- function() psl_expr("threadIdx.z", ty$u32)
+
+psl$grid_dim_x <- function() psl_expr("gridDim.x", ty$u32)
+psl$grid_dim_y <- function() psl_expr("gridDim.y", ty$u32)
+psl$grid_dim_z <- function() psl_expr("gridDim.z", ty$u32)
+
+psl$global_idx_x    <- function() psl_expr("((blockIdx.x * blockDim.x) + threadIdx.x)", ty$u32)
+psl$global_stride_x <- function() psl_expr("(blockDim.x * gridDim.x)", ty$u32)
