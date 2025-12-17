@@ -1,31 +1,31 @@
 test_that("CUDA static shared memory reduction renders", {
-  reduce_kernel <- td$kernel(td$Params(n = ty$u32, x = ty$ptr_const(ty$i32), out = ty$ptr_mut(ty$i32)))(function(n, x, out) {
-    s    <- td$let(s, td$shared_array(s, ty$i32, 256L))
-    gtid <- td$let(gtid, td$global_idx_x())
-    tid  <- td$let(tid, td$thread_idx_x())
-    bid  <- td$let(bid, td$block_idx_x())
+  reduce_kernel <- psl$kernel(psl$Params(n = ty$u32, x = ty$const_ptr(ty$i32), out = ty$mut_ptr(ty$i32)))(function(n, x, out) {
+    s    <- psl$let(s, psl$shared_array(s, ty$i32, 256L))
+    gtid <- psl$let(gtid, psl$global_idx_x())
+    tid  <- psl$let(tid, psl$thread_idx_x())
+    bid  <- psl$let(bid, psl$block_idx_x())
 
-    val <- td$let(val, td$const(0, ty$i32))
-    td$if_(gtid < n, {
+    val <- psl$let(val, psl$const(0, ty$i32))
+    psl$if_(gtid < n, {
       val <- x[tid]
     })
     s[tid] <- val
-    td$sync_threads()
+    psl$sync_threads()
 
     offsets <- c(128L, 64L, 32L, 16L, 8L, 4L, 2L, 1L)
     for (off in offsets) {
-      off_td <- td$const(off, ty$u32)
-      td$if_(tid < off_td, {
+      off_td <- psl$const(off, ty$u32)
+      psl$if_(tid < off_td, {
         s[tid] <- s[tid] + s[tid + off_td]
       })
-      td$sync_threads()
+      psl$sync_threads()
     }
 
-    td$if_(tid == td$const(0, ty$u32), {
-      out[bid] <- s[td$const(0, ty$u32)]
+    psl$if_(tid == psl$const(0, ty$u32), {
+      out[bid] <- s[psl$const(0, ty$u32)]
     })
   })
-  code <- td$render(list(reduce_kernel = reduce_kernel), headers = c("cuda_runtime.h", "cstdint"), dialect = "cuda")
+  code <- psl$render(list(reduce_kernel = reduce_kernel), headers = c("cuda_runtime.h", "cstdint"), dialect = "cuda")
   expect_snapshot(code)
 })
 

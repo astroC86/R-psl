@@ -1,14 +1,14 @@
 test_that("render minimal kernel looks reasonable", {
-  mul2 <- td$fn(td$Params(x = ty$rcpp_vector_mut(ty$i32)), ret = ty$rcpp_vector_mut(ty$i32))(function(x) {
-    ptr <- td$let(ptr, td$cast(x, ty$ptr_mut(ty$i32)))
-    n <- td$let(n, td$len(x))
-    td$for_(i, td$const(0, ty$u32), n, expr = {
-      ptr[i] <- ptr[i] * td$const(2, ty$i32)
+  mul2 <- psl$fn(psl$Params(x = ty$mut_rcpp_vector(ty$i32)), ret = ty$mut_rcpp_vector(ty$i32))(function(x) {
+    ptr <- psl$let(ptr, psl$cast(x, ty$mut_ptr(ty$i32)))
+    n <- psl$let(n, psl$len(x))
+    psl$for_(i, psl$const(0, ty$u32), n, expr = {
+      ptr[i] <- ptr[i] * psl$const(2, ty$i32)
     })
-    td$ret(x)
+    psl$ret(x)
   })
 
-  code <- td$render(
+  code <- psl$render(
     list(mul2 = mul2),
     headers = c("Rcpp.h", "cstdint"),
     dialect = "cpp"

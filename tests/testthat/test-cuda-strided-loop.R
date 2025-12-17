@@ -1,10 +1,10 @@
 test_that("CUDA strided loops render", {
-  kernel <- td$kernel(td$Params(n = ty$u32, x = ty$ptr_mut(ty$i32)))(function(n, x) {
-    td$for_(i, lo = td$global_idx_x(), hi = n, step = td$global_stride_x(), expr = {
-      x[i] <- x[i] * td$const(2, ty$i32)
+  kernel <- psl$kernel(psl$Params(n = ty$u32, x = ty$mut_ptr(ty$i32)))(function(n, x) {
+    psl$for_(i, lo = psl$global_idx_x(), hi = n, step = psl$global_stride_x(), expr = {
+      x[i] <- x[i] * psl$const(2, ty$i32)
     })
   })
 
-  code <- td$render(list(kernel = kernel), headers = c("cuda_runtime.h", "cstdint"), dialect = "cuda")
+  code <- psl$render(list(kernel = kernel), headers = c("cuda_runtime.h", "cstdint"), dialect = "cuda")
   expect_snapshot(code)
 })
