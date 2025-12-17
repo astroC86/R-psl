@@ -248,6 +248,152 @@ raw_stmt <- function(fmt, ...) {
   invisible(NULL)
 }
 
+cuda_launch <- function(kernel, grid, block, ..., kernel_name = NULL, sync = TRUE) {
+  ctx <- .tinydsl_state$ctx
+  if (is.null(ctx)) stop("cuda_launch() used outside tinydsl render context", call. = FALSE)
+
+  if (!inherits(kernel, "td_func") || !identical(kernel$kind, "kernel")) {
+    stop("cuda_launch() requires a tinydsl kernel() as the first argument", call. = FALSE)
+  }
+
+  kernel_sym <- substitute(kernel)
+  if (is.null(kernel_name)) {
+    if (is.symbol(kernel_sym)) {
+      kernel_name <- as.character(kernel_sym)
+    } else {
+      stop("cuda_launch() requires kernel_name when kernel is not a simple symbol", call. = FALSE)
+    }
+  }
+  if (!is.character(kernel_name) || length(kernel_name) != 1 || !nzchar(kernel_name)) {
+    stop("kernel_name must be a non-empty string", call. = FALSE)
+  }
+
+  kparams <- kernel$params
+  kparam_names <- names(kparams)
+  user_args <- list(...)
+  user_arg_names <- names(user_args) %||% rep("", length(user_args))
+
+  if (length(user_args) != length(kparam_names)) {
+    stop(
+      "cuda_launch() requires exactly ", length(kparam_names),
+      " kernel argument(s): ", paste(kparam_names, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  has_any_names <- any(nzchar(user_arg_names))
+  has_all_names <- all(nzchar(user_arg_names))
+  if (has_any_names && !has_all_names) {
+    stop("cuda_launch() requires either all kernel arguments named or none named", call. = FALSE)
+  }
+
+  args_by_param <- vector("list", length(kparam_names))
+  names(args_by_param) <- kparam_names
+  if (has_all_names) {
+    extra <- setdiff(user_arg_names, kparam_names)
+    missing <- setdiff(kparam_names, user_arg_names)
+    if (length(extra) > 0) stop("cuda_launch() got unknown kernel argument(s): ", paste(extra, collapse = ", "), call. = FALSE)
+    if (length(missing) > 0) stop("cuda_launch() missing kernel argument(s): ", paste(missing, collapse = ", "), call. = FALSE)
+    for (nm in kparam_names) args_by_param[[nm]] <- user_args[[nm]]
+  } else {
+    for (i in seq_along(kparam_names)) args_by_param[[kparam_names[[i]]]] <- user_args[[i]]
+  }
+
+  allocs <- list()
+  call_args <- vector("list", length(kparam_names))
+  names(call_args) <- kparam_names
+
+  for (nm in kparam_names) {
+    pty <- kparams[[nm]]
+    arg <- args_by_param[[nm]]
+
+    if (pty$kind == "prim") {
+      if (inherits(arg, "td_rcpp_vector") || inherits(arg, "td_rcpp_matrix")) {
+        stop("Kernel argument '", nm, "' expects a primitive, got an Rcpp vector/matrix", call. = FALSE)
+      }
+      call_args[[nm]] <- td_code(arg)
+      next
+    }
+
+    if (pty$kind != "ptr") stop("Unsupported kernel param kind in cuda_launch(): ", pty$kind, call. = FALSE)
+
+    if (inherits(arg, "td_rcpp_vector") || inherits(arg, "td_rcpp_matrix")) {
+      if (identical(pty$mut, "mut") && identical(arg$type$mut, "const")) {
+        stop("Kernel argument '", nm, "' expects a mutable pointer but got a const Rcpp container", call. = FALSE)
+      }
+      if (is.null(pty$elem)) stop("cuda_launch() cannot infer bytes for void* kernel param '", nm, "'", call. = FALSE)
+      if (!identical(arg$type$elem$name, pty$elem$name)) {
+        stop(
+          "Kernel argument '", nm, "' element type mismatch: kernel expects ",
+          pty$elem$name, ", but container has ", arg$type$elem$name,
+          call. = FALSE
+        )
+      }
+
+      elem_cxx <- cxx_type(pty$elem)
+      needs_copy_back <- identical(pty$mut, "mut") && identical(arg$type$mut, "mut")
+      host_ptr_ty <- if (needs_copy_back) paste0(elem_cxx, "*") else paste0("const ", elem_cxx, "*")
+      host_ptr_cast <- if (needs_copy_back) elem_cxx else paste0("const ", elem_cxx)
+
+      h_var <- paste0("td_h_", nm)
+      d_var <- paste0("td_d_", nm)
+      bytes_var <- paste0("td_bytes_", nm)
+      n_elems_expr <- paste0(arg$name, ".size()")
+
+      allocs[[nm]] <- list(
+        nm = nm,
+        container_name = arg$name,
+        elem_cxx = elem_cxx,
+        host_ptr_ty = host_ptr_ty,
+        host_ptr_cast = host_ptr_cast,
+        h_var = h_var,
+        d_var = d_var,
+        bytes_var = bytes_var,
+        n_elems_expr = n_elems_expr,
+        needs_copy_back = needs_copy_back
+      )
+      call_args[[nm]] <- d_var
+      next
+    }
+
+    call_args[[nm]] <- td_code(arg)
+  }
+
+  ctx$emit("{")
+  ctx$with_indent({
+    ctx$emit("cudaError_t td_err;")
+
+    for (a in allocs) {
+      ctx$emit(paste0(a$host_ptr_ty, " ", a$h_var, " = reinterpret_cast<", a$host_ptr_cast, "*>(", a$container_name, ".begin());"))
+      ctx$emit(paste0(a$elem_cxx, "* ", a$d_var, " = nullptr;"))
+      ctx$emit(paste0("size_t ", a$bytes_var, " = (size_t)", a$n_elems_expr, " * sizeof(", a$elem_cxx, ");"))
+      ctx$emit(paste0("td_err = cudaMalloc((void**)&", a$d_var, ", ", a$bytes_var, ");"))
+      ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+      ctx$emit(paste0("td_err = cudaMemcpy(", a$d_var, ", ", a$h_var, ", ", a$bytes_var, ", cudaMemcpyHostToDevice);"))
+      ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+      ctx$emit("")
+    }
+
+    ctx$emit(paste0(kernel_name, "<<<", td_code(grid), ", ", td_code(block), ">>>(", paste(unlist(call_args, use.names = FALSE), collapse = ", "), ");"))
+
+    if (isTRUE(sync)) {
+      ctx$emit("td_err = cudaDeviceSynchronize();")
+      ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+    }
+
+    for (a in allocs) {
+      if (isTRUE(a$needs_copy_back)) {
+        ctx$emit(paste0("td_err = cudaMemcpy(", a$h_var, ", ", a$d_var, ", ", a$bytes_var, ", cudaMemcpyDeviceToHost);"))
+        ctx$emit("if (td_err != cudaSuccess) Rcpp::stop(cudaGetErrorString(td_err));")
+      }
+      ctx$emit(paste0("cudaFree(", a$d_var, ");"))
+      ctx$emit("")
+    }
+  })
+  ctx$emit("}")
+  invisible(NULL)
+}
+
 td_func <- function(kind, params, body, host = FALSE, device = FALSE, force_inline = FALSE, ret = NULL) {
   stopifnot(inherits(params, "td_params"))
   if (!is.function(body)) stop("body must be a function", call. = FALSE)
@@ -680,6 +826,7 @@ td$let <- let
 td$if_ <- if_
 td$for_ <- for_
 td$raw_stmt <- raw_stmt
+td$cuda_launch <- cuda_launch
 td$raw_expr <- raw_expr
 td$cast <- cast
 td$len  <- len
