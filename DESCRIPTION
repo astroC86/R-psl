@@ -1,0 +1,16 @@
+Package: tinydsl
+Type: Package
+Title: Tiny Typed DSL for C++/CUDA Codegen
+Version: 0.0.1
+Authors@R: person("tinydsl", "maintainer", email = "noreply@example.com", role = c("aut", "cre"))
+Author: tinydsl maintainer [aut, cre]
+Maintainer: tinydsl maintainer <noreply@example.com>
+Description: Minimal, dependency-free (runtime) R DSL that renders C++/CUDA source code
+    (and optional Rcpp bindings).
+License: Proprietary
+Encoding: UTF-8
+Imports:
+    Rcpp
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

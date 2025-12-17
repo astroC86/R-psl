@@ -1,0 +1,5 @@
+export(td)
+export(ty)
+S3method("[", td_ptr)
+S3method("[<-", td_ptr)
+S3method(Ops, td_expr)
