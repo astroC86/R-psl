@@ -159,10 +159,13 @@ raw_expr <- function(fmt, out_type, ...) {
   td_expr(out, out_type)
 }
 
-td_ctx <- function() {
+td_ctx <- function(dialect = NULL, device = FALSE, func_kind = NULL) {
   ctx <- new.env(parent = emptyenv())
   ctx$lines <- character()
   ctx$indent <- 1L
+  ctx$dialect <- dialect
+  ctx$device <- isTRUE(device)
+  ctx$func_kind <- func_kind
   ctx$emit <- function(line = "") {
     prefix <- paste(rep("    ", ctx$indent), collapse = "")
     ctx$lines <- c(ctx$lines, paste0(prefix, line))
@@ -174,6 +177,14 @@ td_ctx <- function() {
     force(expr)
     invisible(NULL)
   }
+  ctx
+}
+
+td_require_ctx <- function(feature, dialect = NULL, device = FALSE) {
+  ctx <- .tinydsl_state$ctx
+  if (is.null(ctx)) stop(feature, " used outside tinydsl render context", call. = FALSE)
+  if (!is.null(dialect) && !identical(ctx$dialect, dialect)) stop(feature, " requires dialect='", dialect, "'", call. = FALSE)
+  if (isTRUE(device) && !isTRUE(ctx$device)) stop(feature, " requires device code (kernel or device fn)", call. = FALSE)
   ctx
 }
 
@@ -429,9 +440,11 @@ fn <- function(params, body = NULL, host = FALSE, device = FALSE, force_inline =
   td_func("fn", params, body, host = host, device = device, force_inline = force_inline, ret = ret)
 }
 
-compile_func_body <- function(func, export_name) {
+compile_func_body <- function(func, export_name, dialect = c("cpp", "cuda")) {
+  dialect <- match.arg(dialect)
   stopifnot(inherits(func, "td_func"))
-  ctx <- td_ctx()
+  is_device <- identical(dialect, "cuda") && (identical(func$kind, "kernel") || (identical(func$kind, "fn") && isTRUE(func$device)))
+  ctx <- td_ctx(dialect = dialect, device = is_device, func_kind = func$kind)
   old <- .tinydsl_state$ctx
   .tinydsl_state$ctx <- ctx
   on.exit({ .tinydsl_state$ctx <- old }, add = TRUE)
@@ -477,6 +490,75 @@ func_signature <- function(func, code_name, dialect = c("cpp", "cuda")) {
     param_lines <- c(param_lines, paste0("    ", cxx_type(params[[nm]]), " ", nm))
   }
   list(attrs = attrs, ret = ret, name = name, param_lines = param_lines)
+}
+
+td_sync_threads <- function() {
+  ctx <- td_require_ctx("sync_threads()", dialect = "cuda", device = TRUE)
+  ctx$emit("__syncthreads();")
+  invisible(NULL)
+}
+
+td_full_warp_mask <- function() td_expr("0xFFFFFFFFu", ty$u32)
+td_warp_size <- function() td_expr("((uint32_t)warpSize)", ty$u32)
+td_lane_id <- function() td_expr("((uint32_t)(threadIdx.x % warpSize))", ty$u32)
+td_warp_id <- function() td_expr("((uint32_t)(threadIdx.x / warpSize))", ty$u32)
+
+td_shared_array <- function(sym, elem_type, n) {
+  ctx <- td_require_ctx("shared_array()", dialect = "cuda", device = TRUE)
+  sym <- substitute(sym)
+  if (!is.symbol(sym)) stop("shared_array() first argument must be a symbol", call. = FALSE)
+  name <- as.character(sym)
+  if (!inherits(elem_type, "td_type") || elem_type$kind != "prim") stop("shared_array() elem_type must be a primitive tinydsl type", call. = FALSE)
+  if (!(is.numeric(n) && length(n) == 1 && is.finite(n) && n > 0 && n == as.integer(n))) {
+    stop("shared_array() requires a positive integer 'n' known at compile time", call. = FALSE)
+  }
+  ctx$emit(paste0("__shared__ ", cxx_type(elem_type), " ", name, "[", as.integer(n), "];"))
+  td_ptr_base(name, ty$ptr_mut(elem_type))
+}
+
+td_sync_warp <- function(mask = NULL) {
+  ctx <- td_require_ctx("sync_warp()", dialect = "cuda", device = TRUE)
+  if (is.null(mask)) mask <- td$full_warp_mask()
+  ctx$emit(paste0("__syncwarp(", td_code(mask), ");"))
+  invisible(NULL)
+}
+
+td_ballot_sync <- function(mask, pred) {
+  td_require_ctx("ballot_sync()", dialect = "cuda", device = TRUE)
+  td_expr(paste0("__ballot_sync(", td_code(mask), ", ", td_code(pred), ")"), ty$u32)
+}
+
+td_shfl_down_sync <- function(mask, var, delta, width = NULL) {
+  td_require_ctx("shfl_down_sync()", dialect = "cuda", device = TRUE)
+  if (!inherits(var, "td_expr") || is.null(var$type) || !inherits(var$type, "td_type") || var$type$kind != "prim") {
+    stop("shfl_down_sync() requires a typed primitive td_expr for var", call. = FALSE)
+  }
+  if (!(var$type$name %in% c("i32", "u32"))) stop("shfl_down_sync() only supports i32/u32 currently", call. = FALSE)
+  args <- c(td_code(mask), td_code(var), td_code(delta))
+  if (!is.null(width)) args <- c(args, td_code(width))
+  td_expr(paste0("__shfl_down_sync(", paste(args, collapse = ", "), ")"), var$type)
+}
+
+td_shfl_up_sync <- function(mask, var, delta, width = NULL) {
+  td_require_ctx("shfl_up_sync()", dialect = "cuda", device = TRUE)
+  if (!inherits(var, "td_expr") || is.null(var$type) || !inherits(var$type, "td_type") || var$type$kind != "prim") {
+    stop("shfl_up_sync() requires a typed primitive td_expr for var", call. = FALSE)
+  }
+  if (!(var$type$name %in% c("i32", "u32"))) stop("shfl_up_sync() only supports i32/u32 currently", call. = FALSE)
+  args <- c(td_code(mask), td_code(var), td_code(delta))
+  if (!is.null(width)) args <- c(args, td_code(width))
+  td_expr(paste0("__shfl_up_sync(", paste(args, collapse = ", "), ")"), var$type)
+}
+
+td_shfl_xor_sync <- function(mask, var, lane_mask, width = NULL) {
+  td_require_ctx("shfl_xor_sync()", dialect = "cuda", device = TRUE)
+  if (!inherits(var, "td_expr") || is.null(var$type) || !inherits(var$type, "td_type") || var$type$kind != "prim") {
+    stop("shfl_xor_sync() requires a typed primitive td_expr for var", call. = FALSE)
+  }
+  if (!(var$type$name %in% c("i32", "u32"))) stop("shfl_xor_sync() only supports i32/u32 currently", call. = FALSE)
+  args <- c(td_code(mask), td_code(var), td_code(lane_mask))
+  if (!is.null(width)) args <- c(args, td_code(width))
+  td_expr(paste0("__shfl_xor_sync(", paste(args, collapse = ", "), ")"), var$type)
 }
 
 render_one_decl <- function(sig, with_semicolon = TRUE) {
@@ -542,7 +624,7 @@ render <- function(entry_points, headers = character(), bind = FALSE, bind_name 
       out <- c(out, "// [[Rcpp::export]]")
     }
     out <- c(out, render_one_decl(sig, with_semicolon = FALSE))
-    body_lines <- compile_func_body(e$func, e$export_name)
+    body_lines <- compile_func_body(e$func, e$export_name, dialect = dialect)
     out <- c(out, body_lines, "}", "")
   }
 
@@ -551,7 +633,7 @@ render <- function(entry_points, headers = character(), bind = FALSE, bind_name 
     for (e in internal) {
       sig <- func_signature(e$func, e$code_name, dialect = dialect)
       out <- c(out, render_one_decl(sig, with_semicolon = FALSE))
-      body_lines <- compile_func_body(e$func, e$export_name)
+      body_lines <- compile_func_body(e$func, e$export_name, dialect = dialect)
       out <- c(out, body_lines, "}", "")
     }
     out <- c(out, "} // namespace internal", "")
@@ -820,19 +902,31 @@ td$ty <- ty
 td$Params <- Params
 td$kernel <- kernel
 td$fn <- fn
+td$ret <- ret
 td$render <- render
-td$const <- td_const
 td$let <- let
+td$const <- td_const
+td$cast <- cast
+td$shared_array <- td_shared_array
 td$if_ <- if_
 td$for_ <- for_
-td$raw_stmt <- raw_stmt
-td$cuda_launch <- cuda_launch
-td$raw_expr <- raw_expr
-td$cast <- cast
 td$len  <- len
-td$ret <- ret
+td$raw_stmt <- raw_stmt
+td$raw_expr <- raw_expr
+td$cuda_launch <- cuda_launch
 td$compile_cpp <- compile_cpp
 td$compile_cuda <- compile_cuda
+
+td$sync_threads <- td_sync_threads
+td$full_warp_mask <- td_full_warp_mask
+td$warp_size <- td_warp_size
+td$lane_id <- td_lane_id
+td$warp_id <- td_warp_id
+td$sync_warp <- td_sync_warp
+td$ballot_sync <- td_ballot_sync
+td$shfl_down_sync  <- td_shfl_down_sync 
+td$shfl_up_sync <- td_shfl_up_sync
+td$shfl_xor_sync  <- td_shfl_xor_sync 
 
 td$block_idx_x <- function() td_expr("blockIdx.x", ty$u32)
 td$block_idx_y <- function() td_expr("blockIdx.y", ty$u32)
@@ -846,3 +940,10 @@ td$block_dim_z <- function() td_expr("blockDim.z", ty$u32)
 td$thread_idx_x <- function() td_expr("threadIdx.x", ty$u32)
 td$thread_idx_y <- function() td_expr("threadIdx.y", ty$u32)
 td$thread_idx_z <- function() td_expr("threadIdx.z", ty$u32)
+
+td$grid_dim_x <- function() td_expr("gridDim.x", ty$u32)
+td$grid_dim_y <- function() td_expr("gridDim.y", ty$u32)
+td$grid_dim_z <- function() td_expr("gridDim.z", ty$u32)
+
+td$global_idx_x    <- function() td_expr("((blockIdx.x * blockDim.x) + threadIdx.x)", ty$u32)
+td$global_stride_x <- function() td_expr("(blockDim.x * gridDim.x)", ty$u32)

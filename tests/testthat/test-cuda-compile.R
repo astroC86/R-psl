@@ -4,8 +4,7 @@ test_that("compile_cuda builds a loadable shared library", {
   testthat::skip_if_not(nzchar(nvcc), "nvcc not available")
 
   mul2_kernel <- td$kernel(td$Params(n = ty$u32, x = ty$ptr_mut(ty$i32)))(function(n, x) {
-    i <- td$let(i, td$block_idx_x() * td$block_dim_x() + td$thread_idx_x())
-    td$if_(i < n, {
+    td$for_(i, lo = td$global_idx_x(), hi = n, step = td$global_stride_x(), expr = {
       x[i] <- x[i] * td$const(2, ty$i32)
     })
   })
